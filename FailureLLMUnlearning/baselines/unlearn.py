@@ -46,7 +46,9 @@ def main():
             tokenizer_dir=args.tokenizer_dir,
             resume_from_checkpoint=args.resume_from_checkpoint,
             alpha=args.alpha,
-            threshold=args.threshold
+            threshold=args.threshold,
+            lambda_q=args.lambda_q,
+            delta_q=args.delta_q
         )
 
     return;
@@ -100,6 +102,14 @@ def get_args():
     parser.add_argument(
         '--threshold', type=int, default=95,
         help="threshold for SURE to filter salient modules"
+    )
+    parser.add_argument(
+        '--lambda_q', type=float, default=0.0,
+        help="Weight for quantization-aware hinge loss on forget set (q4)."
+    )
+    parser.add_argument(
+        '--delta_q', type=float, default=1.0,
+        help="Logit-space bucket width Delta for 4-bit hinge loss (margin = Delta/2)."
     )
     
     args = parser.parse_args()

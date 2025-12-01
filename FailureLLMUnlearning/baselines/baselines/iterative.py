@@ -25,7 +25,9 @@ def unlearn(
     tokenizer_dir: str | None = None,
     resume_from_checkpoint: bool = False,
     alpha: float = 1.0,
-    threshold: int = 90
+    threshold: int = 90,
+    lambda_q: float = 0.0,
+    delta_q: float = 1.0
 ):
     if 'gd' in loss_type:
         assert retain_data_file is not None, "Retain data must be specified for grad_diff."
@@ -38,7 +40,7 @@ def unlearn(
     # load reference model (learned model) for negative preference optimization and KL divergence constraints
     ref_model = (
         load_model(model_dir)
-        if 'npo' in loss_type or 'kl' in loss_type or 'rmu' in loss_type
+        if 'npo' in loss_type or 'kl' in loss_type or 'rmu' in loss_type or 'q4' in loss_type
         else None
     )
     dataset = ForgetRetainDataset(
@@ -72,7 +74,9 @@ def unlearn(
         data_collator=dataset.get_collate_fn(),
         loss_type=loss_type,
         alpha=alpha,
-        threshold=threshold
+        threshold=threshold,
+        lambda_q=lambda_q,
+        delta_q=delta_q
         )
     else:
         trainer = IterativeUnlearner(
@@ -83,7 +87,9 @@ def unlearn(
             args=training_args,
             data_collator=dataset.get_collate_fn(),
             loss_type=loss_type,
-            alpha=alpha
+            alpha=alpha,
+            lambda_q=lambda_q,
+            delta_q=delta_q
         )
     model.config.use_cache = False  # silence the warnings.
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
@@ -101,11 +107,15 @@ class IterativeUnlearner(Trainer):
                  beta: float = 0.1,
                  alpha: float = 1.0,
                  threshold: int = 90,
+                 lambda_q: float = 0.0,
+                 delta_q: float = 1.0,
                  **kwargs):
         self.loss_type = loss_type
         self.ref_model = ref_model
         self.beta = beta    # Only relevant when `'po' in self.loss_type`
         self.alpha = alpha  # Weighting for retain data loss
+        self.lambda_q = lambda_q
+        self.delta_q = delta_q
         if ref_model is not None:
             # assert 'po' in self.loss_type or 'kl' in self.loss_type
             ref_model = ref_model.eval()
@@ -134,7 +144,7 @@ class IterativeUnlearner(Trainer):
             )
             loss_r = outputs_r.loss
 
-        if 'klf' in self.loss_type or 'npo' in self.loss_type or 'rmu' in self.loss_type:
+        if 'klf' in self.loss_type or 'npo' in self.loss_type or 'rmu' in self.loss_type or 'q4' in self.loss_type:
             with torch.no_grad():
                 outputs_f_ref = self.ref_model(
                     x_f['input_ids'],
@@ -192,6 +202,20 @@ class IterativeUnlearner(Trainer):
             L_retain = torch.mean(torch.norm(activations_r - activations_r_ref, dim=-1) ** 2)
 
             loss += L_forget + self.alpha * L_retain
+
+        if 'q4' in self.loss_type and self.lambda_q > 0 and self.ref_model is not None:
+            # Quantization-aware hinge loss in logit space
+            logits_new = outputs_f.logits
+            logits_ref = outputs_f_ref.logits
+
+            diff = (logits_new - logits_ref).abs()
+            margin = self.delta_q / 2.0  # target |diff| >= Delta/2
+
+            # Hinge: penalty when |diff| < margin
+            q4_penalty = F.relu(margin - diff)
+            loss_q4 = q4_penalty.mean()
+
+            loss += self.lambda_q * loss_q4
 
         return (loss, outputs_f) if return_outputs else loss
 
