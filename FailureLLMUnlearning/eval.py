@@ -111,9 +111,26 @@ def eval_model(
         if max_samples is not None:
             data = data[:max_samples]
             print(f"⚠ Using limited dataset: {len(data)} samples (max_samples={max_samples})")
+
+        # Robust parsing: handle both dict records and plain strings
+        prompts, gts = [], []
+        for d in data:
+            if isinstance(d, dict):
+                prompt = d.get('prompt') or d.get('input') or d.get('text') or ""
+                gt = d.get('gt') or d.get('answer') or d.get('label') or d.get('output') or ""
+            else:
+                # If the data item is a bare string, treat it as the prompt with empty ground truth
+                prompt = str(d)
+                gt = ""
+            if prompt == "":
+                # Skip malformed entries
+                continue
+            prompts.append(prompt)
+            gts.append(gt)
+
         agg, log = eval_verbmem(
-            prompts=[d['prompt'] for d in data],
-            gts=[d['gt'] for d in data],
+            prompts=prompts,
+            gts=gts,
             model=model, tokenizer=tokenizer,
             max_new_tokens=verbmem_max_new_tokens
         )
